@@ -1,0 +1,20 @@
+# IntelliJ
+.idea/
+
+# Node
+node_modules/
+dist/
+
+# Spring Boot
+target/
+**/application.properties
+**/application.yaml
+
+# Logs
+*.log
+
+# Environment
+.env
+
+# VS Code
+.vscode/
