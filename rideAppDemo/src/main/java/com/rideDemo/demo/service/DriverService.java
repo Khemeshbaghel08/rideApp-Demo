@@ -14,11 +14,13 @@ import com.rideDemo.demo.repository.TripRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.geo.Point;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 @Service
 public class DriverService {
@@ -28,6 +30,8 @@ public class DriverService {
     private RideRepository rideRepository;
     @Autowired
     private TripRepository tripRepository;
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
 
     @Transactional
     public Driver createDriver(Driver driver) {
@@ -37,7 +41,10 @@ public class DriverService {
         driver.setCreatedAt(LocalDateTime.now());
         driver.setUpdatedAt(LocalDateTime.now());
 
-        return driverRepository.save(driver);
+        Driver savedDriver = driverRepository.save(driver);
+        assignDriverToPendingRide(savedDriver);
+
+        return savedDriver;
     }
 
     @Transactional
@@ -57,7 +64,36 @@ public class DriverService {
 
         driverRepository.save(driver);
     }
+    @Transactional
+    public void assignDriverToPendingRide(Driver driver) {
 
+        System.out.println("assignDriverToPendingRide CALLED for driver: " + driver.getId());
+
+        Optional<Ride> pendingRide =
+                rideRepository.findFirstByStatusOrderByRequestedAtAsc(RideStatus.REQUESTED);
+
+        if (pendingRide.isPresent()) {
+            Ride ride = pendingRide.get();
+            System.out.println("Assigning ride: " + ride.getId());
+
+            ride.setDriverId(driver.getId());
+            ride.setStatus(RideStatus.OFFERED);
+            ride.setUpdatedAt(LocalDateTime.now());
+
+            driver.setStatus(DriverStatus.RESERVED);
+            driver.setCurrentRideId(ride.getId());
+            driver.setUpdatedAt(LocalDateTime.now());
+
+            rideRepository.save(ride);
+            driverRepository.save(driver);
+            System.out.println("Ride moved to OFFERED");
+
+            messagingTemplate.convertAndSend(
+                    "/topic/rides/" + ride.getId(),
+                    ride
+            );
+        }
+    }
     @Transactional
     public String acceptRide(String driverId, String rideId) {
 

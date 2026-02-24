@@ -27,6 +27,10 @@ public class TripService {
     private TripRepository tripRepository;
     @Autowired
     private DriverRepository driverRepository;
+    @Autowired
+    private NotificationService notificationService;
+    @Autowired
+    private DriverService driverService;
 
     @Transactional
     public void startTrip(String tripId) {
@@ -51,6 +55,7 @@ public class TripService {
 
         ride.setStatus(RideStatus.ONGOING);
         ride.setStartedAt(LocalDateTime.now());
+        notificationService.notifyRideUpdate(ride.getRiderId(), ride);
     }
 
     @Transactional
@@ -96,6 +101,9 @@ public class TripService {
         tripRepository.save(trip);
         rideRepository.save(ride);
         driverRepository.save(driver);
+        notificationService.notifyRideUpdate(ride.getRiderId(), ride);
+        driverService.assignDriverToPendingRide(driver);
+
 
         return new TripSummary(
                 trip.getId(),

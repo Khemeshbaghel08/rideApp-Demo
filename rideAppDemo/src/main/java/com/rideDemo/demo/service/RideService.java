@@ -80,6 +80,44 @@ public class RideService {
         return mapToResponse(ride);
     }
 
+    @Transactional
+    public void startRide(String rideId) {
+
+        Ride ride = rideRepository.findByIdForUpdate(rideId)
+                .orElseThrow(() -> new RuntimeException("Ride not found"));
+
+        if (ride.getStatus() != RideStatus.ACCEPTED) {
+            throw new RuntimeException("Ride must be ACCEPTED before starting");
+        }
+
+        boolean driverHasActiveRide =
+                rideRepository.existsByDriverIdAndStatusIn(
+                        ride.getDriverId(),
+                        List.of(RideStatus.STARTED)
+                );
+
+        if (driverHasActiveRide) {
+            throw new RuntimeException("Driver already has an active ride");
+        }
+
+        ride.setStatus(RideStatus.STARTED);
+        rideRepository.save(ride);
+    }
+
+    @Transactional
+    public void endRide(String rideId) {
+
+        Ride ride = rideRepository.findByIdForUpdate(rideId)
+                .orElseThrow(() -> new RuntimeException("Ride not found"));
+
+        if (ride.getStatus() != RideStatus.STARTED) {
+            throw new RuntimeException("Ride is not in STARTED state");
+        }
+
+        ride.setStatus(RideStatus.COMPLETED);
+        rideRepository.save(ride);
+    }
+
     private RideResponse mapToResponse(Ride ride) {
         RideResponse response = new RideResponse();
         response.setRideId(ride.getId());

@@ -49,8 +49,10 @@ public class Ride {
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
     private LocalDateTime cancelledAt;
+    private LocalDateTime updatedAt;
     private LocalDateTime offerExpiresAt;
 
     @Version
     private Long version;
+
 }

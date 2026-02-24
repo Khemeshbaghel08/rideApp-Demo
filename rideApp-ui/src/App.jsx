@@ -1,19 +1,61 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { Client } from "@stomp/stompjs";
 
+const WS_URL = "ws://localhost:8080/ws";
 const API = "http://localhost:8080";
 
 function App() {
-  const [rideId, setRideId] = useState("");
-  const [rideStatus, setRideStatus] = useState(null);
-  const [tripId, setTripId] = useState("");
+  const [rides, setRides] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [connected, setConnected] = useState(false);
+  const stompClientRef = useRef(null);
 
-   const pickupLat = 28.60 + Math.random() * 0.05;
-          const pickupLng = 77.20 + Math.random() * 0.05;
+  useEffect(() => {
+    const client = new Client({
+      brokerURL: WS_URL,
+      reconnectDelay: 5000,
+      onConnect: () => {
+        console.log("Connected");
+        setConnected(true);
+      },
+      onDisconnect: () => {
+        setConnected(false);
+      },
+      onStompError: (frame) => {
+        console.error("Broker error:", frame);
+      }
+    });
 
-          const dropLat = 28.50 + Math.random() * 0.05;
-          const dropLng = 77.30 + Math.random() * 0.05;
+    client.activate();
+    stompClientRef.current = client;
+
+    return () => {
+      client.deactivate();
+    };
+  }, []);
+
+ const subscribeToRide = (rideId) => {
+     if (!stompClientRef.current || !connected) {
+         console.log("⏳ WebSocket not ready yet");
+         return;
+       }
+
+     stompClientRef.current.subscribe(
+       `/topic/rides/${rideId}`,
+       (message) => {
+         const updatedRide = JSON.parse(message.body);
+
+         setRides((prev) =>
+           prev.map(r =>
+             r.rideId === updatedRide.rideId ? updatedRide : r
+           )
+         );
+     console.log("📩 WebSocket message received:", message.body);
+       }
+     );
+   };
+
   const getStatusColor = (status) => {
     switch (status) {
       case "REQUESTED": return "#6c757d";
@@ -25,12 +67,10 @@ function App() {
     }
   };
 
-  const createRide = async () => {
+  const createRide = async (ride) => {
     try {
       setLoading(true);
       setError("");
-      setRideStatus(null);
-      setTripId("");
 
       const riderId = "rider-" + crypto.randomUUID().substring(0, 5);
       const distance = Math.floor(Math.random() * 20) + 5;
@@ -47,12 +87,12 @@ function App() {
           riderId,
           distance,
           pickupLocation: {
-            latitude: pickupLat,
-            longitude: pickupLng
+            latitude: 28.60 + Math.random() * 0.05,
+            longitude: 77.20 + Math.random() * 0.05
           },
           dropLocation: {
-            latitude: dropLat,
-            longitude: dropLng
+            latitude: 28.50 + Math.random() * 0.05,
+            longitude: 77.30 + Math.random() * 0.05
           }
         })
       });
@@ -60,9 +100,8 @@ function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(JSON.stringify(data));
 
-      setRideId(data.rideId);
-      setRideStatus(data);
-
+    setRides(prev => [...prev, data]);
+    subscribeToRide(data.rideId);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -70,56 +109,87 @@ function App() {
     }
   };
 
-  const fetchRide = async (id) => {
-    try {
-      const response = await fetch(`${API}/v1/rides/${id}`);
-      if (!response.ok) throw new Error("Failed to fetch ride");
-      const data = await response.json();
-      setRideStatus(data);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+ const acceptRide = async (ride) => {
+   try {
+     const response = await fetch(
+       `${API}/v1/drivers/${ride.driverId}/accept`,
+       {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ rideId: ride.rideId })
+       }
+     );
 
-  const acceptRide = async () => {
+     const data = await response.json().catch(() => null);
+
+     setRides(prev =>
+       prev.map(r =>
+         r.rideId === ride.rideId
+           ? { ...r, tripId: data?.tripId, status: "ACCEPTED" }
+           : r
+       )
+     );
+
+   } catch (err) {
+     setError(err.message);
+   }
+ };
+
+  const startTrip = async (ride) => {
     try {
-      const response = await fetch(
-        `${API}/v1/drivers/${rideStatus.driverId}/accept`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rideId })
+
+      const response = await fetch(`${API}/v1/trips/${ride.tripId}/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
         }
-      );
+      });
 
-      if (!response.ok) throw new Error("Accept failed");
-      const data = await response.json().catch(() => null);
-      if (data?.tripId) setTripId(data.tripId);
+      if (response.ok) {
+            setRides(prev =>
+              prev.map(r =>
+                r.rideId === ride.rideId
+                  ? { ...r, status: "ONGOING" }
+                  : r
+              )
+            );
+          }
 
-    } catch (err) {
-      setError(err.message);
+    } catch (error) {
+      console.error("Error starting trip:", error);
     }
   };
 
-  const startTrip = async () => {
-    try {
-      await fetch(`${API}/v1/trips/${tripId}/start`, { method: "POST" });
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+  const endTrip = async (ride) => {
+     try {
+        const response = await fetch(
+          `${API}/v1/trips/${ride.tripId}/end`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            }
+          }
+        );
 
-  const endTrip = async () => {
-    try {
-      await fetch(`${API}/v1/trips/${tripId}/end`, { method: "POST" });
-    } catch (err) {
-      setError(err.message);
-    }
+        if (response.ok) {
+          setRides(prev =>
+            prev.map(r =>
+              r.rideId === ride.rideId
+                ? { ...r, status: "COMPLETED" }
+                : r
+            )
+          );
+        }
+
+      } catch (err) {
+        console.error(err);
+      }
   };
 
   const pay = async () => {
     try {
-      if (!rideStatus.finalFare) {
+      if (!ride.finalFare) {
         alert("Trip not completed yet");
         return;
       }
@@ -132,7 +202,7 @@ function App() {
         },
         body: JSON.stringify({
           rideId,
-          amount: rideStatus.finalFare
+          amount: ride.finalFare
         })
       });
 
@@ -141,20 +211,19 @@ function App() {
         throw new Error(err);
       }
 
-      alert("Payment Successful");
+      setRides(prev =>
+            prev.map(r =>
+              r.rideId === ride.rideId
+                ? { ...r, status: "PAID" }
+                : r
+            )
+          );
 
     } catch (err) {
-      setError(err.message);
+      console.error(err);
     }
   };
 
-  useEffect(() => {
-    if (!rideId) return;
-    const interval = setInterval(() => {
-      fetchRide(rideId);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [rideId]);
 
   return (
     <div style={{ padding: 40, fontFamily: "Arial", maxWidth: 600, margin: "auto" }}>
@@ -174,56 +243,52 @@ function App() {
         </p>
       )}
 
-      {rideId && (
-        <div style={{ marginTop: 20 }}>
-          <strong>Ride ID:</strong> {rideId}
-        </div>
-      )}
+      {rides.map((ride) => (
+           <div
+             key={ride.rideId}
+             style={{
+               marginTop: 20,
+               padding: 20,
+               border: "1px solid #ddd",
+               borderRadius: 8
+             }}
+           >
+             <h3 style={{ color: getStatusColor(ride.status) }}>
+               Ride ID: {ride.rideId}
+             </h3>
 
-      {rideStatus && (
-        <div
-          style={{
-            marginTop: 20,
-            padding: 20,
-            border: "1px solid #ddd",
-            borderRadius: 8
-          }}
-        >
-          <h3 style={{ color: getStatusColor(rideStatus.status) }}>
-            Status: {rideStatus.status}
-          </h3>
+             <p>Status: {ride.status}</p>
+             <p>Driver: {ride.driverId || "Not Assigned"}</p>
+             <p>Estimated Fare: ₹{ride.estimatedFare}</p>
+             <p>Final Fare: {ride.finalFare ? `₹${ride.finalFare}` : "-"}</p>
 
-          <p><strong>Driver:</strong> {rideStatus.driverId || "Not Assigned"}</p>
-          <p><strong>Estimated Fare:</strong> ₹{rideStatus.estimatedFare}</p>
-          <p><strong>Final Fare:</strong> {rideStatus.finalFare ? `₹${rideStatus.finalFare}` : "-"}</p>
+             {ride.status === "OFFERED" && (
+               <button onClick={() => acceptRide(ride)}>
+                 Accept Ride
+               </button>
+             )}
 
-          {rideStatus.status === "OFFERED" && (
-            <button onClick={acceptRide} style={{ marginTop: 10 }}>
-              Accept Ride
-            </button>
-          )}
+             {ride.status === "ACCEPTED" && (
+               <button onClick={() => startTrip(ride)}>
+                 Start Trip
+               </button>
+             )}
 
-          {rideStatus.status === "ACCEPTED" && (
-            <button onClick={startTrip} style={{ marginTop: 10 }}>
-              Start Trip
-            </button>
-          )}
+             {ride.status === "ONGOING" && (
+               <button onClick={() => endTrip(ride)}>
+                 End Trip
+               </button>
+             )}
 
-          {rideStatus.status === "ONGOING" && (
-            <button onClick={endTrip} style={{ marginTop: 10 }}>
-              End Trip
-            </button>
-          )}
+             {ride.status === "COMPLETED" && (
+               <button onClick={() => alert("Payment Gateway")}>
+                 Pay
+               </button>
+             )}
+           </div>
+         ))}
+       </div>
+     );
 
-          {rideStatus.status === "COMPLETED" && (
-            <button onClick={pay} style={{ marginTop: 10 }}>
-              Pay
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
+ }
 export default App;
